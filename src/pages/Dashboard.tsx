@@ -1,16 +1,28 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   Typography,
   Card,
   CardContent,
-  Grid
+  Grid,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  Alert,
+  Chip
 } from '@mui/material';
+import {
+  ExpandMore as ExpandMoreIcon,
+  BarChart as BarChartIcon,
+  CheckCircle as CheckCircleIcon,
+  TableChart as TableChartIcon
+} from '@mui/icons-material';
 import CasesTable from '../components/Cases/CasesTable';
 import DashboardAnalytics from '../components/Analytics/DashboardAnalytics';
 import QueryTypeSidebar from '../components/Layout/QueryTypeSidebar';
 import LevelOfCareWorkflow from '../components/LevelOfCare/LevelOfCareWorkflow';
 import CaseDetails from '../components/Cases/CaseDetails';
+import AgentSummary from '../components/Agents/AgentSummary';
 import { useQuery } from '../contexts/QueryContext';
 
 const Dashboard: React.FC = () => {
@@ -18,7 +30,17 @@ const Dashboard: React.FC = () => {
   const [selectedQueryType, setSelectedQueryType] = useState<string | null>(null);
   const [selectedFilterType, setSelectedFilterType] = useState<string | null>(null);
   const [showWorkflow, setShowWorkflow] = useState(false);
+  const [excelDataLoaded, setExcelDataLoaded] = useState(false);
   const { queries, setSelectedQuery } = useQuery();
+
+  useEffect(() => {
+    // Simulate Excel/BTW data loading
+    if (queries && queries.length > 0) {
+      setTimeout(() => {
+        setExcelDataLoaded(true);
+      }, 500);
+    }
+  }, [queries]);
 
   const handleCaseClick = (queryId: string, queryType: string) => {
     const query = queries.find(q => q.id === queryId);
@@ -50,11 +72,11 @@ const Dashboard: React.FC = () => {
     : queries;
 
   const stats = {
-    total: queries.length,
-    open: queries.filter(q => q.status === 'open').length,
-    inProgress: queries.filter(q => q.status === 'in_progress').length,
-    resolved: queries.filter(q => q.status === 'resolved').length,
-    totalAmount: queries.reduce((sum, q) => sum + q.queryAmount, 0)
+    total: filteredQueries.length,
+    open: filteredQueries.filter(q => q.status === 'open').length,
+    inProgress: filteredQueries.filter(q => q.status === 'in_progress').length,
+    resolved: filteredQueries.filter(q => q.status === 'resolved').length,
+    totalAmount: filteredQueries.reduce((sum, q) => sum + q.queryAmount, 0)
   };
 
   if (selectedQueryId && selectedQueryType) {
@@ -96,17 +118,45 @@ const Dashboard: React.FC = () => {
         onTypeSelect={setSelectedFilterType} 
       />
       <Box sx={{ marginLeft: '240px', width: 'calc(100% - 240px)', p: 3 }}>
-        <Box sx={{ mb: 3 }}>
-          <Typography variant="h4" component="h1" gutterBottom sx={{ color: '#1976d2', fontWeight: 'bold' }}>
-            EQuery Resolution Dashboard
-          </Typography>
-          <Typography variant="h6" color="text.secondary" sx={{ mb: 1, fontWeight: 'normal' }}>
-            {selectedFilterType ? `${selectedFilterType} Analysis` : 'Executive Overview'}
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            Comprehensive analytics and insights for query management and resolution
-          </Typography>
-        </Box>
+            <Box sx={{ mb: 3 }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
+                <Box>
+                  <Typography variant="h4" component="h1" gutterBottom sx={{ color: '#1976d2', fontWeight: 'bold' }}>
+                    EQuery Resolution Dashboard
+                  </Typography>
+                  <Typography variant="h6" color="text.secondary" sx={{ mb: 1, fontWeight: 'normal' }}>
+                    {selectedFilterType ? `${selectedFilterType} Analysis` : 'Executive Overview'}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Comprehensive analytics and insights for query management and resolution
+                  </Typography>
+                </Box>
+                {excelDataLoaded && (
+                  <Alert 
+                    severity="success" 
+                    icon={<CheckCircleIcon />}
+                    sx={{ 
+                      display: 'flex', 
+                      alignItems: 'center',
+                      backgroundColor: '#e8f5e9',
+                      border: '1px solid #4caf50'
+                    }}
+                  >
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <TableChartIcon sx={{ fontSize: 20 }} />
+                      <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+                        Billing Triage Workbook (BTW) Data Loaded
+                      </Typography>
+                      <Chip 
+                        label={`${queries.length} queries`} 
+                        size="small" 
+                        sx={{ ml: 1, backgroundColor: '#4caf50', color: 'white' }}
+                      />
+                    </Box>
+                  </Alert>
+                )}
+              </Box>
+            </Box>
 
         {/* Stats Cards */}
         <Grid container spacing={2} sx={{ mb: 3 }}>
@@ -172,10 +222,20 @@ const Dashboard: React.FC = () => {
           </Grid>
         </Grid>
 
-        {/* Analytics */}
-        <Box sx={{ mb: 3 }}>
-          <DashboardAnalytics queryType={selectedFilterType || undefined} queries={queries} />
-        </Box>
+        {/* Analytics - Hidden by default, shown in accordion */}
+        <Accordion sx={{ mb: 3 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <BarChartIcon color="primary" />
+              <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
+                Analytics & Insights
+              </Typography>
+            </Box>
+          </AccordionSummary>
+          <AccordionDetails>
+            <DashboardAnalytics queryType={selectedFilterType || undefined} queries={queries} />
+          </AccordionDetails>
+        </Accordion>
 
         {/* Cases Table */}
         <CasesTable 

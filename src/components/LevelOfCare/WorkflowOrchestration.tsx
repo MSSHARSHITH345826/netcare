@@ -1,454 +1,1061 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Box,
   Typography,
-  Card,
-  CardContent,
-  Grid,
   Chip,
   Button,
   Paper,
   LinearProgress,
+  Grid,
   Dialog,
   DialogTitle,
   DialogContent,
   DialogActions,
-  TextField,
-  Alert,
-  Stepper,
-  Step,
-  StepLabel,
-  IconButton,
-  Tooltip
+  Divider,
+  Alert
 } from '@mui/material';
 import {
   CheckCircle as CheckCircleIcon,
   Schedule as ScheduleIcon,
   PlayArrow as PlayArrowIcon,
   Psychology as PsychologyIcon,
-  Close as CloseIcon,
-  Send as SendIcon,
-  Refresh as RefreshIcon
+  Error as ErrorIcon,
+  BarChart as BarChartIcon,
+  Description as DescriptionIcon
 } from '@mui/icons-material';
 import { useQuery } from '../../contexts/QueryContext';
+import { generateAgentOutput, AgentContext } from '../../services/azureOpenAIService';
 
-interface WorkflowStep {
+interface AgentStep {
   id: string;
   name: string;
+  agent: string;
+  agentType: string;
   description: string;
-  status: 'pending' | 'running' | 'completed' | 'error' | 'awaiting_input';
-  component: string;
-  requiresHumanInput?: boolean;
-  humanInputPrompt?: string;
-  inputFields?: Array<{ label: string; type: string; required: boolean }>;
-  nextSteps?: string[];
+  status: 'pending' | 'running' | 'completed' | 'error';
+  position: { x: number; y: number };
+  nextSteps: string[];
+  sessionMessage?: string;
+  processingTime?: number;
+  output?: string;
+  triggeredBy?: string[];
 }
 
 interface WorkflowOrchestrationProps {
   queryType: string;
-  onComplete?: () => void;
-  onStepComplete?: (stepId: string) => void;
+  onBack?: () => void;
 }
 
-const WorkflowOrchestration: React.FC<WorkflowOrchestrationProps> = ({ 
-  queryType, 
-  onComplete,
-  onStepComplete 
-}) => {
-  const { selectedQuery } = useQuery();
-  const [currentStep, setCurrentStep] = useState(0);
-  const [steps, setSteps] = useState<WorkflowStep[]>([]);
-  const [stepDetailsOpen, setStepDetailsOpen] = useState(false);
-  const [humanInputOpen, setHumanInputOpen] = useState(false);
-  const [selectedStep, setSelectedStep] = useState<WorkflowStep | null>(null);
-  const [inputValues, setInputValues] = useState<{ [key: string]: string }>({});
-  const [sessionId] = useState(`session_${Date.now()}`);
+const WorkflowOrchestration: React.FC<WorkflowOrchestrationProps> = ({ queryType, onBack }) => {
+  const { selectedQuery, caseData } = useQuery();
+  const [agents, setAgents] = useState<AgentStep[]>([]);
+  const [showMessage, setShowMessage] = useState<string>('');
+  const [isAnimating, setIsAnimating] = useState(false);
+  const [currentAgentIndex, setCurrentAgentIndex] = useState(0);
+  const [sessionLoaded, setSessionLoaded] = useState(false);
+  const [completedAgents, setCompletedAgents] = useState<Set<string>>(new Set());
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [agentOutputDialogOpen, setAgentOutputDialogOpen] = useState(false);
+  const [currentCompletedAgent, setCurrentCompletedAgent] = useState<AgentStep | null>(null);
+  const [currentStepNumber, setCurrentStepNumber] = useState(0);
 
-  useEffect(() => {
-    // Initialize workflow steps based on query type
-    const workflowSteps: WorkflowStep[] = [
+  // Initialize 12 consolidated agents (reduced from 17)
+  const getInitialAgents = useCallback((): AgentStep[] => {
+    return [
       {
-        id: 'billing-triage',
-        name: 'Billing Triage Workbook',
-        description: 'Filter and identify queries from daily triage workbook',
-        status: 'completed',
-        component: 'BillingTriageView',
-        nextSteps: ['sap-scratchpad']
+        id: 'query-detector',
+        name: 'Query Detection',
+        agent: 'QueryDetector',
+        agentType: 'Monitoring & Detection Agent',
+        description: 'Continuously monitors Billing Triage Workbook for new Level of Care queries',
+        status: 'pending',
+        position: { x: 50, y: 50 },
+        nextSteps: ['level-of-care-resolver'],
+        sessionMessage: 'QueryDetector: Scanning Billing Triage Workbook for Level of Care queries...',
+        processingTime: 0.5,
+        output: 'Query detected: Case GEMS-JHB-2024-092847, Amount: R 99,148.50, Type: Level of Care, Priority: High (> R 50,000). Triggering LevelOfCareResolver.'
       },
       {
-        id: 'sap-scratchpad',
-        name: 'SAP Scratchpad',
-        description: 'Navigate to SAP and review case information',
-        status: 'completed',
-        component: 'SAPScratchpadView',
-        nextSteps: ['short-payment']
+        id: 'level-of-care-resolver',
+        name: 'Workflow Orchestration',
+        agent: 'LevelOfCareResolver',
+        agentType: 'Workflow Orchestration Agent',
+        description: 'Orchestrates the end-to-end Level of Care query resolution process',
+        status: 'pending',
+        position: { x: 300, y: 50 },
+        nextSteps: ['short-payment-analyzer', 'billed-data-extractor', 'b2b-communication-monitor'],
+        triggeredBy: ['query-detector'],
+        sessionMessage: 'LevelOfCareResolver: Initializing workflow orchestration and coordinating sub-agents...',
+        processingTime: 0.3,
+        output: 'Workflow orchestration initialized. Triggering ShortPaymentAnalyzer, BilledDataExtractor, and B2BCommunicationMonitor in parallel.'
       },
       {
-        id: 'short-payment',
+        id: 'short-payment-analyzer',
         name: 'Short Payment Analysis',
-        description: 'Extract and analyze short payment reasons',
-        status: 'completed',
-        component: 'SAPScratchpadView',
-        nextSteps: ['case-overview']
-      },
-      {
-        id: 'case-overview',
-        name: 'Case Overview Review',
-        description: 'Review billed Level of Care services and verify accuracy',
-        status: 'awaiting_input',
-        component: 'SAPCaseOverviewView',
-        requiresHumanInput: true,
-        humanInputPrompt: 'Please review the billed Level of Care services. Do you confirm the billing is accurate?',
-        inputFields: [
-          { label: 'Billing Accuracy Confirmation', type: 'select', required: true },
-          { label: 'Notes or Observations', type: 'textarea', required: false }
-        ],
-        nextSteps: ['b2b-communication']
-      },
-      {
-        id: 'b2b-communication',
-        name: 'B2B Communication Review',
-        description: 'Review authorization communication log and search for electronic authorization',
+        agent: 'ShortPaymentAnalyzer',
+        agentType: 'Data Analysis Agent',
+        description: 'Analyzes short payment reasons and breaks down declined amounts',
         status: 'pending',
-        component: 'SAPAuthScreenView',
-        requiresHumanInput: true,
-        humanInputPrompt: 'Please review B2B communications. Have you found the electronic authorization?',
-        inputFields: [
-          { label: 'Authorization Found', type: 'select', required: true },
-          { label: 'Authorization Number', type: 'text', required: false },
-          { label: 'Approved Days', type: 'number', required: false },
-          { label: 'Comments', type: 'textarea', required: false }
-        ],
-        nextSteps: ['discrepancy']
+        position: { x: 550, y: 50 },
+        nextSteps: ['discrepancy-analyzer'],
+        triggeredBy: ['level-of-care-resolver'],
+        sessionMessage: 'ShortPaymentAnalyzer: Analyzing short payment reasons from SAP Scratchpad...',
+        processingTime: 1.2,
+        output: 'Short payment reason: Level of Care days 29/07/2024 to 12/08/2024 not approved. Declined: R 99,148.50 (15 days @ R 6,609.90/day). Reason Code: LOC-DEC-001. Primary cost driver identified. Providing data to DiscrepancyAnalyzer.'
       },
       {
-        id: 'discrepancy',
-        name: 'Discrepancy Identification',
-        description: 'System identifies discrepancies automatically based on authorization data',
+        id: 'billed-data-extractor',
+        name: 'Billed Data Extraction',
+        agent: 'BilledDataExtractor',
+        agentType: 'Data Retrieval Agent',
+        description: 'Extracts billed Level of Care information from SAP',
         status: 'pending',
-        component: 'SAPAuthScreenView',
-        nextSteps: ['approved-dates']
+        position: { x: 800, y: 50 },
+        nextSteps: ['discrepancy-analyzer'],
+        triggeredBy: ['level-of-care-resolver'],
+        sessionMessage: 'BilledDataExtractor: Extracting billed Level of Care data from SAP Case Overview...',
+        processingTime: 0.8,
+        output: 'Billed Level of Care: Code 58201 (High Care), Period: 14/07/2024 to 23/08/2024, Total Days: 41. Changes: Days 1-5 (ICU 58002), Days 6-41 (High Care 58201). Providing data to DiscrepancyAnalyzer.'
       },
       {
-        id: 'approved-dates',
-        name: 'Approved Dates Extraction',
-        description: 'Extract approved Level of Care dates from B2B communication',
+        id: 'b2b-communication-monitor',
+        name: 'B2B Communication Monitoring',
+        agent: 'B2BCommunicationMonitor',
+        agentType: 'Integration & Monitoring Agent',
+        description: 'Monitors and retrieves B2B communication history',
         status: 'pending',
-        component: 'SAPAuthScreenView',
-        nextSteps: ['clinical-data']
+        position: { x: 1050, y: 50 },
+        nextSteps: ['discrepancy-analyzer', 'response-handler'],
+        triggeredBy: ['level-of-care-resolver'],
+        sessionMessage: 'B2BCommunicationMonitor: Retrieving B2B communication logs from UMS system...',
+        processingTime: 1.5,
+        output: 'B2B Communication retrieved: 5 messages found. Latest: Clinical data submission (29/08/2024) pending response. Communication history includes authorization requests and responses. Providing data to DiscrepancyAnalyzer and ResponseHandler.'
       },
       {
-        id: 'clinical-data',
-        name: 'CareOn Clinical Data',
-        description: 'Retrieve clinical notes for appeal support and submit to medical aid',
+        id: 'discrepancy-analyzer',
+        name: 'Discrepancy Analysis',
+        agent: 'DiscrepancyAnalyzer',
+        agentType: 'Analysis & Intelligence Agent',
+        description: 'Analyzes discrepancies between billed and approved Level of Care',
         status: 'pending',
-        component: 'CareOnClinicalView',
-        requiresHumanInput: true,
-        humanInputPrompt: 'Please confirm clinical data has been retrieved and is ready for submission.',
-        inputFields: [
-          { label: 'Clinical Data Status', type: 'select', required: true },
-          { label: 'Case Manager Notes', type: 'textarea', required: false },
-          { label: 'Ready for Submission', type: 'select', required: true }
-        ],
-        nextSteps: ['funder-response']
+        position: { x: 50, y: 250 },
+        nextSteps: ['approved-dates-retriever', 'clinical-data-agent'],
+        triggeredBy: ['short-payment-analyzer', 'billed-data-extractor', 'b2b-communication-monitor'],
+        sessionMessage: 'DiscrepancyAnalyzer: Comparing billed vs approved Level of Care dates and generating discrepancy reason...',
+        processingTime: 2.1,
+        output: 'Discrepancy identified: Level of Care days 13/08/2024 to 23/08/2024 (11 days) not approved. Cost impact: R 72,708.90. Root cause: Clinical justification required for extended High Care beyond 30 days. Triggering ApprovedDatesRetriever and ClinicalDataAgent.'
       },
       {
-        id: 'funder-response',
-        name: 'Funder Response Monitoring',
-        description: 'Monitor and flag medical aid responses automatically',
+        id: 'approved-dates-retriever',
+        name: 'Approved Dates Retrieval',
+        agent: 'ApprovedDatesRetriever',
+        agentType: 'Integration & Retrieval Agent',
+        description: 'Retrieves detailed approved Level of Care dates from B2B systems',
         status: 'pending',
-        component: 'SAPAuthScreenView',
-        nextSteps: ['debtpack']
+        position: { x: 300, y: 250 },
+        nextSteps: ['discrepancy-analyzer'],
+        triggeredBy: ['discrepancy-analyzer'],
+        sessionMessage: 'ApprovedDatesRetriever: Querying UMS B2B system for detailed approved Level of Care dates...',
+        processingTime: 1.0,
+        output: 'Approved dates retrieved: Period 1 (14/07-28/07): 15 days approved, Period 2 (29/07-12/08): 15 days approved, Period 3 (13/08-23/08): 11 days declined. Total: 30 approved, 11 declined. Providing data to DiscrepancyAnalyzer.'
       },
       {
-        id: 'debtpack',
-        name: 'DebtPack Query Management',
-        description: 'Navigate to DebtPack and open query for resolution',
+        id: 'clinical-data-agent',
+        name: 'Clinical Data Management',
+        agent: 'ClinicalDataAgent',
+        agentType: 'Integration & Data Management Agent',
+        description: 'Manages clinical data extraction from CareOn and submission to medical aids',
         status: 'pending',
-        component: 'DebtPackView',
-        nextSteps: ['close-query']
+        position: { x: 550, y: 250 },
+        nextSteps: ['response-handler'],
+        triggeredBy: ['discrepancy-analyzer'],
+        sessionMessage: 'ClinicalDataAgent: Extracting clinical notes from CareOn for queried date range (13/08 to 23/08)...',
+        processingTime: 3.5,
+        output: 'Clinical data extracted: 11 days of CareOn notes retrieved. Notes formatted and ready for Case Manager review. Data includes patient progress, medication management, and High Care justification. After Case Manager approval, submitting via B2B.'
       },
       {
-        id: 'close-query',
-        name: 'Close Query',
-        description: 'Select outcome, add notes, and close the query',
+        id: 'response-handler',
+        name: 'Funder Response & Escalation',
+        agent: 'ResponseHandler',
+        agentType: 'Analysis & Routing Agent',
+        description: 'Monitors for and analyzes funder responses, handles escalations',
         status: 'pending',
-        component: 'DebtPackView',
-        requiresHumanInput: true,
-        humanInputPrompt: 'Please select the final outcome and provide closure notes.',
-        inputFields: [
-          { label: 'Query Outcome', type: 'select', required: true },
-          { label: 'Closure Notes', type: 'textarea', required: true },
-          { label: 'Follow-up Required', type: 'select', required: false }
-        ],
-        nextSteps: []
+        position: { x: 800, y: 250 },
+        nextSteps: ['query-closure-agent'],
+        triggeredBy: ['b2b-communication-monitor', 'clinical-data-agent'],
+        sessionMessage: 'ResponseHandler: Monitoring B2B system for medical aid response to clinical data submission...',
+        processingTime: 1.8,
+        output: 'Response detected: Full approval received for 11 days (13/08 to 23/08). All 41 days now approved. Approval percentage: 100%. No escalation needed. Routing to QueryClosureAgent.'
+      },
+      {
+        id: 'query-closure-agent',
+        name: 'Query Closure',
+        agent: 'QueryClosureAgent',
+        agentType: 'Workflow & Documentation Agent',
+        description: 'Manages query closure in DebtPack with intelligent note generation',
+        status: 'pending',
+        position: { x: 1050, y: 250 },
+        nextSteps: ['resubmission-agent'],
+        triggeredBy: ['response-handler'],
+        sessionMessage: 'QueryClosureAgent: Preparing query closure in DebtPack with intelligent note generation...',
+        processingTime: 1.2,
+        output: 'Query closed: Outcome "Resubmit Approved" selected. Note generated: "Full approval received for all 41 days after clinical data submission. Ready for resubmission." Status updated. Handing off to ResubmissionAgent.'
+      },
+      {
+        id: 'resubmission-agent',
+        name: 'Claim Resubmission',
+        agent: 'ResubmissionAgent',
+        agentType: 'Action Execution Agent',
+        description: 'Prepares and resubmits claims after query resolution',
+        status: 'pending',
+        position: { x: 1300, y: 250 },
+        nextSteps: [],
+        triggeredBy: ['query-closure-agent'],
+        sessionMessage: 'ResubmissionAgent: Preparing claim resubmission with updated approvals...',
+        processingTime: 1.5,
+        output: 'Claim resubmitted: Case GEMS-JHB-2024-092847 resubmitted for R 99,148.50. All approvals verified. Debtors Controller notified. Query marked as fully resolved.'
+      },
+      {
+        id: 'management-reporting-agent',
+        name: 'Management & Reporting',
+        agent: 'ManagementReportingAgent',
+        agentType: 'Management & Reporting Agent',
+        description: 'Tracks query status, creates audit trails, aggregates dashboard metrics, manages follow-ups, and monitors exceptions',
+        status: 'pending',
+        position: { x: 50, y: 450 },
+        nextSteps: [],
+        triggeredBy: ['query-detector'],
+        sessionMessage: 'ManagementReportingAgent: Tracking query status, creating audit trails, and updating dashboard metrics...',
+        processingTime: 0.8,
+        output: 'Management & Reporting: Query status tracked (Open → Investigation → Clinical Data Submitted → Response Received → Resolved). Audit trail created with 12 agent actions logged. Dashboard updated: Query resolved in 2.3 days (75% faster than average). Revenue recovered: R 99,148.50. No follow-ups required. No exceptions detected.'
       }
     ];
-    setSteps(workflowSteps);
-    loadSessionState(workflowSteps);
   }, []);
 
-  const loadSessionState = (initialSteps: WorkflowStep[]) => {
-    const savedSession = localStorage.getItem(`workflow_session_${selectedQuery?.id || 'default'}`);
+  useEffect(() => {
+    const initialAgents = getInitialAgents();
+    setAgents(initialAgents);
+    loadSessionState(initialAgents);
+  }, [getInitialAgents]);
+
+  const loadSessionState = (initialAgents: AgentStep[]) => {
+    const sessionKey = `netcare_orchestration_${selectedQuery?.id || 'default'}`;
+    const savedSession = localStorage.getItem(sessionKey);
     if (savedSession) {
       try {
         const parsed = JSON.parse(savedSession);
-        const savedSteps = parsed.steps || [];
-        if (savedSteps.length === initialSteps.length) {
-          setSteps(savedSteps);
-          setCurrentStep(parsed.currentStep || 0);
+        if (parsed.agents && parsed.agents.length === initialAgents.length) {
+          setAgents(parsed.agents);
+          setCurrentAgentIndex(parsed.currentAgentIndex || 0);
+          setShowMessage(parsed.showMessage || '');
+          setIsAnimating(parsed.isAnimating || false);
+          setCompletedAgents(new Set(parsed.completedAgents || []));
         }
       } catch (e) {
         console.error('Error loading session:', e);
       }
     }
+    setSessionLoaded(true);
   };
 
-  const saveSessionState = (updatedSteps: WorkflowStep[], stepIndex: number) => {
-    localStorage.setItem(
-      `workflow_session_${selectedQuery?.id || 'default'}`,
-      JSON.stringify({ steps: updatedSteps, currentStep: stepIndex })
-    );
-  };
-
-  const handleStepClick = (step: WorkflowStep, index: number) => {
-    setSelectedStep(step);
-    if (step.requiresHumanInput && step.status === 'awaiting_input') {
-      setHumanInputOpen(true);
-    } else {
-      setStepDetailsOpen(true);
-    }
-  };
-
-  const handleHumanInputSubmit = () => {
-    if (!selectedStep) return;
-
-    // Validate required fields
-    const requiredFields = selectedStep.inputFields?.filter(f => f.required) || [];
-    const missingFields = requiredFields.filter(f => !inputValues[f.label]);
+  const saveSessionState = (updatedAgents: AgentStep[], agentIndex: number, message: string, animating: boolean, completed: Set<string>) => {
+    const sessionKey = `netcare_orchestration_${selectedQuery?.id || 'default'}`;
+    localStorage.setItem(sessionKey, JSON.stringify({
+      agents: updatedAgents,
+      currentAgentIndex: agentIndex,
+      showMessage: message,
+      isAnimating: animating,
+      completedAgents: Array.from(completed),
+      lastUpdated: new Date().toISOString()
+    }));
     
-    if (missingFields.length > 0) {
-      alert(`Please fill in all required fields: ${missingFields.map(f => f.label).join(', ')}`);
+    // Save agent outputs to AgentSummary
+    const agentNameMap: Record<string, string> = {
+      'QueryDetector': 'QueryDetector',
+      'LevelOfCareResolver': 'LevelOfCareResolver',
+      'ShortPaymentAnalyzer': 'ShortPaymentAnalyzer',
+      'BilledDataExtractor': 'BilledDataExtractor',
+      'B2BCommunicationMonitor': 'B2BCommunicationMonitor',
+      'DiscrepancyAnalyzer': 'DiscrepancyAnalyzer',
+      'ApprovedDatesRetriever': 'ApprovedDatesRetriever',
+      'ClinicalDataAgent': 'ClinicalDataAgent',
+      'ResponseHandler': 'ResponseHandler',
+      'QueryClosureAgent': 'QueryClosureAgent',
+      'ResubmissionAgent': 'ResubmissionAgent',
+      'ManagementReportingAgent': 'ManagementReportingAgent'
+    };
+    
+    const outputs: Record<string, string> = {};
+    updatedAgents.forEach(agent => {
+      if (agent.status === 'completed' && agent.output) {
+        const agentName = agentNameMap[agent.agent] || agent.agent;
+        outputs[agentName] = agent.output;
+        outputs[agent.id] = agent.output;
+        outputs[agent.agent] = agent.output;
+      }
+    });
+    localStorage.setItem(`agent_outputs_${selectedQuery?.id || 'default'}`, JSON.stringify(outputs));
+  };
+
+  const startWorkflow = () => {
+    setIsAnimating(true);
+    setCurrentAgentIndex(0);
+    setCurrentStepNumber(1);
+    setCompletedAgents(new Set());
+    const updatedAgents = agents.map((agent, index) => {
+      if (index === 0) {
+        return { ...agent, status: 'running' as const };
+      }
+      return agent;
+    });
+    setAgents(updatedAgents);
+    if (updatedAgents[0]?.sessionMessage) {
+      setShowMessage(updatedAgents[0].sessionMessage);
+    }
+    saveSessionState(updatedAgents, 0, updatedAgents[0]?.sessionMessage || '', true, new Set());
+    // Start sequential processing
+    processNextAgentSequential(updatedAgents, 0, new Set());
+  };
+
+  // Sequential processing - one agent at a time with popup
+  const processNextAgentSequential = async (currentAgents: AgentStep[], index: number, completed: Set<string>) => {
+    if (index >= currentAgents.length) {
+      setIsAnimating(false);
+      setShowMessage('✓ All 12 agents completed successfully! Workflow resolved.');
       return;
     }
 
-    // Update step status
-    const updatedSteps = steps.map(step => {
-      if (step.id === selectedStep.id) {
-        return { ...step, status: 'completed' as const };
+    const agent = currentAgents[index];
+    if (!agent) {
+      // Find next available agent
+      const nextIndex = currentAgents.findIndex((a, i) => i > index && a.status === 'pending');
+      if (nextIndex >= 0) {
+        setTimeout(() => processNextAgentSequential(currentAgents, nextIndex, completed), 1000);
+      } else {
+        setIsAnimating(false);
+        setShowMessage('✓ All agents completed successfully! Workflow resolved.');
       }
-      // Auto-advance to next step
-      if (step.id === selectedStep.nextSteps?.[0]) {
-        if (step.requiresHumanInput) {
-          return { ...step, status: 'awaiting_input' as const };
-        } else {
-          return { ...step, status: 'running' as const };
-        }
-      }
-      return step;
-    });
-
-    setSteps(updatedSteps);
-    const nextStepIndex = steps.findIndex(s => s.id === selectedStep.nextSteps?.[0]);
-    if (nextStepIndex >= 0) {
-      setCurrentStep(nextStepIndex);
-      // If next step requires human input, open dialog
-      const nextStep = updatedSteps[nextStepIndex];
-      if (nextStep.requiresHumanInput && nextStep.status === 'awaiting_input') {
-        setSelectedStep(nextStep);
-        setHumanInputOpen(true);
-      }
+      return;
     }
 
-    saveSessionState(updatedSteps, nextStepIndex >= 0 ? nextStepIndex : currentStep);
-    setInputValues({});
-    setHumanInputOpen(false);
+    // Mark agent as running
+    const updatedAgents = currentAgents.map((a, i) => 
+      i === index ? { ...a, status: 'running' as const } : a
+    );
+    setAgents(updatedAgents);
+    setCurrentAgentIndex(index);
+    setCurrentStepNumber(index + 1);
     
-    if (onStepComplete) {
-      onStepComplete(selectedStep.id);
+    if (agent.sessionMessage) {
+      setShowMessage(agent.sessionMessage);
     }
-  };
 
-  const handleAutoAdvance = (stepId: string) => {
-    const step = steps.find(s => s.id === stepId);
-    if (!step || step.requiresHumanInput) return;
-
-    const updatedSteps = steps.map(s => {
-      if (s.id === stepId) {
-        return { ...s, status: 'completed' as const };
+    // Collect previous agent outputs for context
+    const previousOutputs: Record<string, string> = {};
+    completed.forEach(completedId => {
+      const completedAgent = currentAgents.find(a => a.id === completedId);
+      if (completedAgent && completedAgent.output) {
+        previousOutputs[completedAgent.agent] = completedAgent.output;
       }
-      if (s.id === step.nextSteps?.[0]) {
-        if (s.requiresHumanInput) {
-          return { ...s, status: 'awaiting_input' as const };
-        } else {
-          return { ...s, status: 'running' as const };
-        }
-      }
-      return s;
     });
 
-    setSteps(updatedSteps);
-    const nextStepIndex = steps.findIndex(s => s.id === step.nextSteps?.[0]);
-    if (nextStepIndex >= 0) {
-      setCurrentStep(nextStepIndex);
-      const nextStep = updatedSteps[nextStepIndex];
-      if (nextStep.requiresHumanInput && nextStep.status === 'awaiting_input') {
-        setTimeout(() => {
-          setSelectedStep(nextStep);
-          setHumanInputOpen(true);
-        }, 1000);
-      }
+    // Generate agent output using LLM
+    const agentContext: AgentContext = {
+      agentName: agent.agent,
+      agentType: agent.agentType,
+      agentDescription: agent.description,
+      caseNumber: selectedQuery?.caseNumber,
+      queryType: selectedQuery?.queryType,
+      queryAmount: selectedQuery?.queryAmount,
+      medicalAid: selectedQuery?.medicalAid,
+      hospital: selectedQuery?.hospital,
+      caseData: caseData || undefined,
+      previousAgentOutputs: previousOutputs,
+      workflowStep: index + 1,
+      totalSteps: currentAgents.length
+    };
+
+    // Generate output using LLM
+    let generatedOutput = agent.output || '';
+    try {
+      generatedOutput = await generateAgentOutput(agentContext);
+    } catch (error) {
+      console.error(`Error generating output for ${agent.agent}:`, error);
+      generatedOutput = agent.output || `${agent.agent}: Agent completed successfully.`;
     }
-    saveSessionState(updatedSteps, nextStepIndex >= 0 ? nextStepIndex : currentStep);
+
+    // Simulate processing time (slower for better UX)
+    const processingTime = Math.max((agent.processingTime || 2) * 1000, 2000);
+    await new Promise(resolve => setTimeout(resolve, processingTime));
+
+    // Mark agent as completed
+    const finalAgents = updatedAgents.map((a, i) => 
+      i === index ? { ...a, status: 'completed' as const, output: generatedOutput } : a
+    );
+
+    const newCompleted = new Set(completed);
+    newCompleted.add(agent.id);
+    setCompletedAgents(newCompleted);
+    setAgents(finalAgents);
+
+    // Show completion message
+    if (generatedOutput) {
+      setShowMessage(`${agent.agent}: ${generatedOutput}`);
+    } else {
+      setShowMessage(`${agent.agent}: Completed successfully`);
+    }
+
+    // Save agent outputs to localStorage for Agent Summary
+    const outputsKey = `agent_outputs_${selectedQuery?.id || 'default'}`;
+    const existingOutputs = JSON.parse(localStorage.getItem(outputsKey) || '{}');
+    const updatedOutputs = {
+      ...existingOutputs,
+      [agent.agent]: generatedOutput,
+      [agent.id]: generatedOutput,
+      [agent.name]: generatedOutput
+    };
+    localStorage.setItem(outputsKey, JSON.stringify(updatedOutputs));
+
+    // Show popup dialog with agent output
+    setCurrentCompletedAgent({ ...agent, output: generatedOutput });
+    setAgentOutputDialogOpen(true);
+
+    saveSessionState(finalAgents, index, generatedOutput || `${agent.agent}: Completed`, true, newCompleted);
   };
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'completed':
-        return <CheckCircleIcon sx={{ color: '#4caf50' }} />;
-      case 'running':
-        return <PlayArrowIcon sx={{ color: '#1976d2' }} />;
-      case 'awaiting_input':
-        return <PsychologyIcon sx={{ color: '#ff9800', animation: 'pulse 2s infinite' }} />;
-      case 'pending':
-        return <ScheduleIcon sx={{ color: '#9e9e9e' }} />;
-      default:
-        return <ScheduleIcon sx={{ color: '#9e9e9e' }} />;
+  const handleDialogClose = () => {
+    setAgentOutputDialogOpen(false);
+    // Continue to next agent after dialog closes
+    const nextIndex = currentAgentIndex + 1;
+    if (nextIndex < agents.length) {
+      setTimeout(() => {
+        processNextAgentSequential(agents, nextIndex, completedAgents);
+      }, 500);
+    } else {
+      setIsAnimating(false);
+      setShowMessage('✓ All 12 agents completed successfully! Workflow resolved.');
     }
+  };
+
+  // Old parallel processing function (kept for reference but not used)
+  const processNextAgent = async (currentAgents: AgentStep[], index: number, completed: Set<string>) => {
+    if (index >= currentAgents.length) {
+      setIsAnimating(false);
+      setShowMessage('✓ All 12 agents completed successfully! Workflow resolved.');
+      return;
+    }
+
+    const agent = currentAgents[index];
+    if (!agent) return;
+
+    // Check if all triggering agents are completed
+    if (agent.triggeredBy && agent.triggeredBy.length > 0) {
+      const allTriggersCompleted = agent.triggeredBy.every(triggerId => {
+        const triggerAgent = currentAgents.find(a => a.id === triggerId);
+        return triggerAgent && completed.has(triggerAgent.id);
+      });
+      if (!allTriggersCompleted && agent.id !== 'query-detector') {
+        // Wait for triggers - find next agent that can run
+        const nextAvailable = currentAgents.findIndex((a, i) => 
+          i > index && 
+          (!a.triggeredBy || a.triggeredBy.every(tid => {
+            const t = currentAgents.find(ta => ta.id === tid);
+            return t && completed.has(t.id);
+          }))
+        );
+        if (nextAvailable >= 0) {
+          setTimeout(() => processNextAgent(currentAgents, nextAvailable, completed), 500);
+        }
+        return;
+      }
+    }
+
+    // Show running message
+    if (agent.sessionMessage) {
+      setShowMessage(agent.sessionMessage);
+    }
+
+    // Collect previous agent outputs for context
+    const previousOutputs: Record<string, string> = {};
+    completed.forEach(completedId => {
+      const completedAgent = currentAgents.find(a => a.id === completedId);
+      if (completedAgent && completedAgent.output) {
+        previousOutputs[completedAgent.agent] = completedAgent.output;
+      }
+    });
+
+    // Generate agent output using LLM
+    const agentContext: AgentContext = {
+      agentName: agent.agent,
+      agentType: agent.agentType,
+      agentDescription: agent.description,
+      caseNumber: selectedQuery?.caseNumber,
+      queryType: selectedQuery?.queryType,
+      queryAmount: selectedQuery?.queryAmount,
+      medicalAid: selectedQuery?.medicalAid,
+      hospital: selectedQuery?.hospital,
+      caseData: caseData || undefined,
+      previousAgentOutputs: previousOutputs,
+      workflowStep: index + 1,
+      totalSteps: currentAgents.length
+    };
+
+    // Generate output using LLM (async) - start immediately
+    let generatedOutput = agent.output || '';
+    const generateOutputPromise = generateAgentOutput(agentContext).catch(error => {
+      console.error(`Error generating output for ${agent.agent}:`, error);
+      return agent.output || `${agent.agent}: Agent completed successfully.`;
+    });
+
+    // Simulate processing time
+    const processingTime = (agent.processingTime || 2) * 1000;
+
+    // Wait for both LLM call and processing time
+    Promise.all([
+      generateOutputPromise,
+      new Promise(resolve => setTimeout(resolve, processingTime))
+    ]).then(([output]) => {
+      generatedOutput = output as string;
+      
+      // Mark current agent as completed
+      const updatedAgents = currentAgents.map((a, i) => {
+        if (i === index) {
+          return { ...a, status: 'completed' as const, output: generatedOutput };
+        }
+        // Start next agents if they're triggered by this one
+        if (agent.nextSteps.includes(a.id)) {
+          // Check if all triggers are met
+          const allTriggersMet = !a.triggeredBy || a.triggeredBy.every(tid => {
+            const triggerAgent = currentAgents.find(ta => ta.id === tid);
+            return triggerAgent && (triggerAgent.id === agent.id || completed.has(triggerAgent.id));
+          });
+          if (allTriggersMet && a.status === 'pending') {
+            return { ...a, status: 'running' as const };
+          }
+        }
+        return a;
+      });
+
+      const newCompleted = new Set(completed);
+      newCompleted.add(agent.id);
+      setCompletedAgents(newCompleted);
+      setAgents(updatedAgents);
+
+      // Show completion message with output - clean format like IPAS
+      if (generatedOutput) {
+        setShowMessage(`${agent.agent}: ${generatedOutput}`);
+      } else {
+        setShowMessage(`${agent.agent}: Completed successfully`);
+      }
+
+      // Find next agents to process
+      const nextAgents = updatedAgents.filter(a => 
+        a.status === 'running' && 
+        (!a.triggeredBy || a.triggeredBy.every(tid => newCompleted.has(tid)))
+      );
+
+      if (nextAgents.length > 0) {
+        // Process parallel agents
+        nextAgents.forEach(nextAgent => {
+          const nextIndex = updatedAgents.findIndex(a => a.id === nextAgent.id);
+          if (nextIndex >= 0) {
+            setTimeout(() => {
+              processNextAgent(updatedAgents, nextIndex, newCompleted);
+            }, 500);
+          }
+        });
+      } else {
+        // Find next sequential agent
+        const nextPending = updatedAgents.findIndex(a => 
+          a.status === 'pending' && 
+          (!a.triggeredBy || a.triggeredBy.every(tid => newCompleted.has(tid)))
+        );
+        
+        if (nextPending >= 0) {
+          setTimeout(() => {
+            processNextAgent(updatedAgents, nextPending, newCompleted);
+          }, 500);
+        } else {
+          // Check if all agents are done
+          const allDone = updatedAgents.every(a => a.status === 'completed' || a.status === 'error');
+          if (allDone) {
+            setIsAnimating(false);
+            setShowMessage('✓ All 12 agents completed successfully! Workflow resolved.');
+          }
+        }
+      }
+
+      saveSessionState(updatedAgents, index, generatedOutput || `✓ ${agent.agent}: Completed`, true, newCompleted);
+    });
+  };
+
+  const resetWorkflow = () => {
+    const initialAgents = getInitialAgents();
+    setAgents(initialAgents);
+    setCurrentAgentIndex(0);
+    setCurrentStepNumber(0);
+    setShowMessage('');
+    setIsAnimating(false);
+    setCompletedAgents(new Set());
+    setAgentOutputDialogOpen(false);
+    setCurrentCompletedAgent(null);
+    const sessionKey = `netcare_orchestration_${selectedQuery?.id || 'default'}`;
+    localStorage.removeItem(sessionKey);
+    localStorage.removeItem(`agent_outputs_${selectedQuery?.id || 'default'}`);
   };
 
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'completed': return '#4caf50';
-      case 'running': return '#1976d2';
-      case 'awaiting_input': return '#ff9800';
-      case 'pending': return '#9e9e9e';
+      case 'running': return '#ff9800';
+      case 'error': return '#f44336';
       default: return '#9e9e9e';
     }
   };
 
-  const completedCount = steps.filter(s => s.status === 'completed').length;
-  const progress = steps.length > 0 ? (completedCount / steps.length) * 100 : 0;
-  const awaitingInputCount = steps.filter(s => s.status === 'awaiting_input').length;
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case 'completed':
+        return <CheckCircleIcon sx={{ color: '#4caf50', fontSize: 20 }} />;
+      case 'running':
+        return <PlayArrowIcon sx={{ color: '#ff9800', fontSize: 20 }} />;
+      case 'error':
+        return <ErrorIcon sx={{ color: '#f44336', fontSize: 20 }} />;
+      default:
+        return <ScheduleIcon sx={{ color: '#9e9e9e', fontSize: 20 }} />;
+    }
+  };
+
+  const renderConnector = (fromAgent: AgentStep, toAgent: AgentStep) => {
+    // Calculate proper connection points (center of boxes)
+    const fromX = fromAgent.position.x + 100; // Center of 200px wide box
+    const fromY = fromAgent.position.y + 60; // Bottom of box (approx)
+    const toX = toAgent.position.x + 100; // Center of target box
+    const toY = toAgent.position.y + 10; // Top of target box
+
+    const isActive = fromAgent.status === 'completed' && (toAgent.status === 'running' || toAgent.status === 'pending');
+    const isCompleted = fromAgent.status === 'completed' && toAgent.status === 'completed';
+
+    // Use curved path for better visual flow
+    const midY = (fromY + toY) / 2;
+    const controlX = (fromX + toX) / 2;
+    const pathData = `M ${fromX} ${fromY} Q ${controlX} ${midY} ${toX} ${toY}`;
+
+    const arrowId = isCompleted ? 'arrowhead' : isActive ? 'arrowhead-blue' : 'arrowhead-gray';
+    const strokeColor = isCompleted ? '#4caf50' : isActive ? '#1976d2' : '#9e9e9e';
+
+    return (
+      <g key={`connector-${fromAgent.id}-${toAgent.id}`}>
+        <path
+          d={pathData}
+          fill="none"
+          stroke={strokeColor}
+          strokeWidth={isActive || isCompleted ? 3 : 2}
+          strokeDasharray={isActive || isCompleted ? '0' : '5,5'}
+          markerEnd={`url(#${arrowId})`}
+          style={{
+            transition: 'all 0.3s ease'
+          }}
+        />
+      </g>
+    );
+  };
+
+  const completedCount = agents.filter(a => a.status === 'completed').length;
+  const progress = agents.length > 0 ? (completedCount / agents.length) * 100 : 0;
 
   return (
     <Box sx={{ p: 3 }}>
-      <Box sx={{ mb: 3 }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-          <Box>
-            <Typography variant="h5" gutterBottom sx={{ color: '#1976d2', fontWeight: 'bold' }}>
-              Workflow Orchestration
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              {queryType} Resolution Workflow - Agentic Process Execution
-            </Typography>
-          </Box>
-          {awaitingInputCount > 0 && (
-            <Alert severity="warning" sx={{ display: 'flex', alignItems: 'center' }}>
-              <PsychologyIcon sx={{ mr: 1 }} />
-              {awaitingInputCount} step{awaitingInputCount > 1 ? 's' : ''} awaiting your input
-            </Alert>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+        <Box>
+          <Typography variant="h5" gutterBottom sx={{ color: '#1a237e', fontWeight: 700, fontSize: '1.75rem', letterSpacing: '-0.5px' }}>
+            Agentic Workflow Orchestration
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.95rem', fontWeight: 400 }}>
+            {queryType} Resolution - 12 AI Agents Working in Harmony
+          </Typography>
+        </Box>
+        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+          <Chip
+            label={isAnimating ? "In Progress" : "Ready"}
+            color={isAnimating ? "warning" : "success"}
+            size="small"
+          />
+          <Chip
+            label={`${completedCount}/${agents.length} Agents Complete`}
+            color="info"
+            size="small"
+          />
+          {!isAnimating && completedCount === 0 && (
+            <Button
+              variant="contained"
+              color="primary"
+              startIcon={<PlayArrowIcon />}
+              onClick={startWorkflow}
+            >
+              Start Workflow
+            </Button>
+          )}
+          {(isAnimating || completedCount > 0) && (
+            <Button
+              variant="outlined"
+              color="error"
+              size="small"
+              onClick={resetWorkflow}
+            >
+              Reset
+            </Button>
           )}
         </Box>
-        
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-          <Box sx={{ flex: 1 }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-              <Typography variant="body2" color="text.secondary">
-                Progress: {completedCount} / {steps.length} steps completed
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {Math.round(progress)}%
-              </Typography>
-            </Box>
-            <LinearProgress 
-              variant="determinate" 
-              value={progress} 
-              sx={{ height: 10, borderRadius: 5 }}
-            />
-          </Box>
-        </Box>
-
-        <Stepper activeStep={currentStep} alternativeLabel sx={{ mb: 3 }}>
-          {steps.slice(0, 6).map((step, index) => (
-            <Step key={step.id} completed={step.status === 'completed'}>
-              <StepLabel
-                error={step.status === 'error'}
-                icon={getStatusIcon(step.status)}
-              >
-                <Typography variant="caption" sx={{ fontSize: '0.7rem' }}>
-                  {step.name}
-                </Typography>
-              </StepLabel>
-            </Step>
-          ))}
-        </Stepper>
       </Box>
 
-      <Grid container spacing={2}>
-        {steps.map((step, index) => (
-          <Grid size={{ xs: 12, sm: 6, md: 4 }} key={step.id}>
-            <Card
-              sx={{
-                cursor: step.status === 'awaiting_input' ? 'pointer' : 'default',
-                border: `3px solid ${getStatusColor(step.status)}`,
-                backgroundColor: step.status === 'running' ? '#e3f2fd' : 
-                                step.status === 'awaiting_input' ? '#fff3cd' : 'white',
-                position: 'relative',
-                '&:hover': {
-                  boxShadow: 6,
-                  transform: step.status === 'awaiting_input' ? 'translateY(-4px) scale(1.02)' : 'translateY(-2px)',
-                  transition: 'all 0.3s ease'
-                },
-                transition: 'all 0.3s ease',
-                animation: step.status === 'awaiting_input' ? 'pulse 2s infinite' : 'none',
-                '@keyframes pulse': {
-                  '0%, 100%': { boxShadow: '0 0 0 0 rgba(255, 152, 0, 0.7)' },
-                  '50%': { boxShadow: '0 0 0 10px rgba(255, 152, 0, 0)' }
-                }
-              }}
-              onClick={() => handleStepClick(step, index)}
-            >
-              <CardContent>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', mb: 1 }}>
-                  <Typography variant="h6" sx={{ fontSize: '0.95rem', fontWeight: 'bold' }}>
-                    {index + 1}. {step.name}
-                  </Typography>
-                  {getStatusIcon(step.status)}
+      {/* Step Indicator - Like IPAS */}
+      {isAnimating && (
+        <Box sx={{ mb: 3, p: 2, backgroundColor: '#f5f5f5', borderRadius: 2, border: '1px solid #e0e0e0' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, overflowX: 'auto', pb: 1 }}>
+            {agents.map((agent, idx) => (
+              <Box
+                key={agent.id}
+                sx={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  minWidth: 150,
+                  position: 'relative',
+                  '&::after': idx < agents.length - 1 ? {
+                    content: '""',
+                    position: 'absolute',
+                    right: -75,
+                    top: 20,
+                    width: 150,
+                    height: 2,
+                    backgroundColor: idx < currentStepNumber - 1 ? '#4caf50' : '#e0e0e0',
+                    zIndex: 0
+                  } : {}
+                }}
+              >
+                <Box
+                  sx={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: '50%',
+                    backgroundColor: idx < currentStepNumber - 1 ? '#4caf50' : idx === currentStepNumber - 1 ? '#1976d2' : '#e0e0e0',
+                    color: 'white',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontWeight: 'bold',
+                    zIndex: 1,
+                    position: 'relative'
+                  }}
+                >
+                  {idx < currentStepNumber - 1 ? <CheckCircleIcon /> : idx + 1}
                 </Box>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 1, fontSize: '0.85rem' }}>
-                  {step.description}
+                <Typography
+                  variant="caption"
+                  sx={{
+                    mt: 1,
+                    textAlign: 'center',
+                    fontWeight: idx === currentStepNumber - 1 ? 'bold' : 'normal',
+                    color: idx === currentStepNumber - 1 ? '#1976d2' : 'text.secondary',
+                    fontSize: '0.7rem'
+                  }}
+                >
+                  Step {idx + 1}: {agent.name}
                 </Typography>
-                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 1 }}>
-                  {step.requiresHumanInput && (
-                    <Chip 
-                      label="Human in Loop" 
-                      size="small" 
-                      icon={<PsychologyIcon />}
-                      sx={{ fontSize: '0.7rem', backgroundColor: '#ff9800', color: 'white' }}
-                    />
-                  )}
-                  <Chip
-                    label={step.status === 'awaiting_input' ? 'AWAITING INPUT' : step.status.toUpperCase()}
-                    size="small"
-                    sx={{
-                      backgroundColor: getStatusColor(step.status),
-                      color: 'white',
-                      fontSize: '0.7rem',
-                      fontWeight: step.status === 'awaiting_input' ? 'bold' : 'normal'
-                    }}
-                  />
-                </Box>
-              </CardContent>
-            </Card>
-          </Grid>
-        ))}
-      </Grid>
+              </Box>
+            ))}
+          </Box>
+        </Box>
+      )}
 
-      {/* Human Input Dialog */}
-      <Dialog 
-        open={humanInputOpen} 
-        onClose={() => setHumanInputOpen(false)}
+      {/* Progress Bar */}
+      <Box sx={{ mb: 3 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+          <Typography variant="body2" color="text.secondary">
+            Overall Progress
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            {Math.round(progress)}%
+          </Typography>
+        </Box>
+        <LinearProgress
+          variant="determinate"
+          value={progress}
+          sx={{ height: 10, borderRadius: 5 }}
+        />
+      </Box>
+
+      {/* Session Message Display - Clean and Aligned like IPAS */}
+      {showMessage && (
+        <Paper
+          elevation={3}
+          sx={{
+            mb: 3,
+            p: 3,
+            backgroundColor: showMessage.includes('✓') || showMessage.includes('completed') ? '#e8f5e9' : '#e3f2fd',
+            border: `2px solid ${showMessage.includes('✓') || showMessage.includes('completed') ? '#4caf50' : '#1976d2'}`,
+            borderRadius: 2,
+            textAlign: 'left',
+            position: 'relative',
+            overflow: 'hidden',
+            '&::before': {
+              content: '""',
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: 4,
+              backgroundColor: showMessage.includes('✓') || showMessage.includes('completed') ? '#4caf50' : '#1976d2'
+            }
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
+            <Box
+              sx={{
+                minWidth: 40,
+                height: 40,
+                borderRadius: '50%',
+                backgroundColor: showMessage.includes('✓') || showMessage.includes('completed') ? '#4caf50' : '#1976d2',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0
+              }}
+            >
+              {showMessage.includes('✓') || showMessage.includes('completed') ? (
+                <CheckCircleIcon sx={{ color: 'white', fontSize: 24 }} />
+              ) : (
+                <PsychologyIcon sx={{ color: 'white', fontSize: 24 }} />
+              )}
+            </Box>
+            <Box sx={{ flex: 1 }}>
+              <Typography
+                variant="h6"
+                sx={{
+                  color: showMessage.includes('✓') || showMessage.includes('completed') ? '#1b5e20' : '#0d47a1',
+                  fontWeight: 600,
+                  mb: 0.5,
+                  fontSize: '1.05rem',
+                  fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif'
+                }}
+              >
+                {showMessage.includes('✓') ? 'Agent Completed' : 'Agent Processing'}
+              </Typography>
+              <Typography
+                variant="body1"
+                sx={{
+                  color: '#212121',
+                  whiteSpace: 'pre-wrap',
+                  lineHeight: 1.7,
+                  fontSize: '0.95rem',
+                  fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif',
+                  fontWeight: 400
+                }}
+              >
+                {showMessage}
+              </Typography>
+            </Box>
+          </Box>
+        </Paper>
+      )}
+
+      {/* Agent Flow Visualization */}
+      <Box
+        ref={containerRef}
+        sx={{
+          height: 700,
+          width: '100%',
+          border: '1px solid #e0e0e0',
+          borderRadius: 2,
+          position: 'relative',
+          overflow: 'auto',
+          backgroundColor: '#fafafa'
+        }}
+      >
+        <svg width="100%" height="680" style={{ position: 'absolute', top: 0, left: 0, minWidth: '1800px' }}>
+          <defs>
+            <marker
+              id="arrowhead"
+              markerWidth="12"
+              markerHeight="10"
+              refX="10"
+              refY="5"
+              orient="auto"
+              markerUnits="strokeWidth"
+            >
+              <path d="M 0 0 L 12 5 L 0 10 z" fill="#4caf50" />
+            </marker>
+            <marker
+              id="arrowhead-blue"
+              markerWidth="12"
+              markerHeight="10"
+              refX="10"
+              refY="5"
+              orient="auto"
+              markerUnits="strokeWidth"
+            >
+              <path d="M 0 0 L 12 5 L 0 10 z" fill="#1976d2" />
+            </marker>
+            <marker
+              id="arrowhead-gray"
+              markerWidth="12"
+              markerHeight="10"
+              refX="10"
+              refY="5"
+              orient="auto"
+              markerUnits="strokeWidth"
+            >
+              <path d="M 0 0 L 12 5 L 0 10 z" fill="#9e9e9e" />
+            </marker>
+            <style>
+              {`
+                @keyframes pulse {
+                  0% { transform: scale(1); opacity: 1; }
+                  50% { transform: scale(1.02); opacity: 0.95; }
+                  100% { transform: scale(1); opacity: 1; }
+                }
+              `}
+            </style>
+          </defs>
+
+          {/* Render connectors - from nextSteps */}
+          {agents.map(agent =>
+            agent.nextSteps.map(nextStepId => {
+              const nextAgent = agents.find(a => a.id === nextStepId);
+              if (!nextAgent) return null;
+              return renderConnector(agent, nextAgent);
+            })
+          )}
+          {/* Render connectors - from triggeredBy (for parallel flows) */}
+          {agents.map(agent => {
+            if (agent.triggeredBy && agent.triggeredBy.length > 0) {
+              return agent.triggeredBy.map(triggerId => {
+                const triggerAgent = agents.find(a => a.id === triggerId);
+                if (!triggerAgent) return null;
+                // Only render if not already rendered via nextSteps
+                const alreadyRendered = triggerAgent.nextSteps.includes(agent.id);
+                if (!alreadyRendered) {
+                  return renderConnector(triggerAgent, agent);
+                }
+                return null;
+              });
+            }
+            return null;
+          })}
+        </svg>
+
+        {/* Render agent boxes */}
+        {agents.map((agent, index) => (
+          <Paper
+            key={agent.id}
+            sx={{
+              position: 'absolute',
+              left: agent.position.x,
+              top: agent.position.y,
+              width: 200,
+              p: 2,
+              cursor: 'pointer',
+              border: `2px solid ${getStatusColor(agent.status)}`,
+              borderRadius: 3,
+              backgroundColor: agent.status === 'running' ? '#fff8e1' : agent.status === 'completed' ? '#f1f8e9' : '#ffffff',
+              boxShadow: agent.status === 'running' ? '0 4px 12px rgba(255, 152, 0, 0.3)' : agent.status === 'completed' ? '0 4px 12px rgba(76, 175, 80, 0.2)' : '0 2px 8px rgba(0, 0, 0, 0.1)',
+              transition: 'all 0.3s ease',
+              '&:hover': {
+                boxShadow: 8,
+                transform: 'scale(1.05)',
+                zIndex: 10
+              },
+              animation: agent.status === 'running' ? 'pulse 1s ease-in-out infinite' : 'none'
+            }}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+              <PsychologyIcon sx={{ mr: 1, color: getStatusColor(agent.status), fontSize: 22 }} />
+              <Typography variant="subtitle2" sx={{ fontWeight: 600, flex: 1, fontSize: '0.9rem', color: '#1a237e', fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif' }}>
+                {index + 1}. {agent.name}
+              </Typography>
+              {getStatusIcon(agent.status)}
+            </Box>
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1, fontSize: '0.75rem', fontWeight: 500, color: '#424242' }}>
+              {agent.agent}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: '0.7rem', mb: 1, lineHeight: 1.4, color: '#616161' }}>
+              {agent.description.substring(0, 70)}...
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 1 }}>
+              <Chip
+                label={agent.status.toUpperCase()}
+                size="small"
+                sx={{
+                  backgroundColor: getStatusColor(agent.status),
+                  color: 'white',
+                  fontSize: '0.65rem',
+                  height: 20
+                }}
+              />
+              {agent.processingTime && agent.processingTime > 0 && (
+                <Chip
+                  label={`${agent.processingTime}s`}
+                  size="small"
+                  variant="outlined"
+                  sx={{ fontSize: '0.65rem', height: 20 }}
+                />
+              )}
+            </Box>
+          </Paper>
+        ))}
+      </Box>
+
+      {/* Agent Summary Stats */}
+      <Box sx={{ mt: 3 }}>
+        <Grid container spacing={2}>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+            <Paper sx={{ p: 2, textAlign: 'center' }}>
+              <Typography variant="h4" sx={{ color: '#1976d2', fontWeight: 'bold' }}>
+                {agents.length}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Total Agents
+              </Typography>
+            </Paper>
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+            <Paper sx={{ p: 2, textAlign: 'center' }}>
+              <Typography variant="h4" sx={{ color: '#4caf50', fontWeight: 'bold' }}>
+                {completedCount}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Completed
+              </Typography>
+            </Paper>
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+            <Paper sx={{ p: 2, textAlign: 'center' }}>
+              <Typography variant="h4" sx={{ color: '#ff9800', fontWeight: 'bold' }}>
+                {agents.filter(a => a.status === 'running').length}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Running
+              </Typography>
+            </Paper>
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+            <Paper sx={{ p: 2, textAlign: 'center' }}>
+              <Typography variant="h4" sx={{ color: '#9e9e9e', fontWeight: 'bold' }}>
+                {agents.filter(a => a.status === 'pending').length}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Pending
+              </Typography>
+            </Paper>
+          </Grid>
+        </Grid>
+      </Box>
+
+      {/* Agent Output Dialog - Like IPAS */}
+      <Dialog
+        open={agentOutputDialogOpen}
+        onClose={handleDialogClose}
         maxWidth="md"
         fullWidth
         PaperProps={{
@@ -458,174 +1065,110 @@ const WorkflowOrchestration: React.FC<WorkflowOrchestrationProps> = ({
           }
         }}
       >
-        <DialogTitle sx={{ 
-          backgroundColor: '#fff3cd', 
-          borderBottom: '2px solid #ff9800',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center'
-        }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <PsychologyIcon sx={{ color: '#ff9800' }} />
-            <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
-              Human Input Required
+        <DialogTitle sx={{ backgroundColor: '#f5f5f5', borderBottom: '2px solid #e0e0e0' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            <PsychologyIcon sx={{ color: '#1a237e', fontSize: 28 }} />
+            <Typography variant="h6" sx={{ fontWeight: 600, fontSize: '1.25rem', color: '#1a237e', fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif' }}>
+              {currentCompletedAgent ? `Step ${currentStepNumber}: ${currentCompletedAgent.name}` : 'Agent Output'}
             </Typography>
           </Box>
-          <IconButton onClick={() => setHumanInputOpen(false)} size="small">
-            <CloseIcon />
-          </IconButton>
-        </DialogTitle>
-        <DialogContent sx={{ mt: 2 }}>
-          <Alert severity="info" sx={{ mb: 3 }}>
-            <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 1 }}>
-              {selectedStep?.name}
-            </Typography>
-            <Typography variant="body2">
-              {selectedStep?.humanInputPrompt}
-            </Typography>
-          </Alert>
-
-          {selectedStep?.inputFields?.map((field, idx) => (
-            <Box key={idx} sx={{ mb: 2 }}>
-              {field.type === 'select' ? (
-                <TextField
-                  fullWidth
-                  select
-                  label={field.label}
-                  required={field.required}
-                  value={inputValues[field.label] || ''}
-                  onChange={(e) => setInputValues({ ...inputValues, [field.label]: e.target.value })}
-                  SelectProps={{
-                    native: true,
-                  }}
-                >
-                  <option value="">Select...</option>
-                  {field.label.includes('Confirmation') && (
-                    <>
-                      <option value="confirmed">Confirmed - Billing is Accurate</option>
-                      <option value="needs_review">Needs Review - Discrepancies Found</option>
-                      <option value="rejected">Rejected - Incorrect Billing</option>
-                    </>
-                  )}
-                  {field.label.includes('Authorization') && (
-                    <>
-                      <option value="found">Found - Authorization Located</option>
-                      <option value="not_found">Not Found - Authorization Missing</option>
-                      <option value="partial">Partial - Some Authorization Found</option>
-                    </>
-                  )}
-                  {field.label.includes('Status') && (
-                    <>
-                      <option value="retrieved">Retrieved - Data Available</option>
-                      <option value="pending">Pending - Awaiting Data</option>
-                      <option value="not_available">Not Available - Data Missing</option>
-                    </>
-                  )}
-                  {field.label.includes('Outcome') && (
-                    <>
-                      <option value="resolved">Resolved - Query Closed</option>
-                      <option value="resubmit">Resubmit - Ready for Resubmission</option>
-                      <option value="escalated">Escalated - Requires Follow-up</option>
-                      <option value="additional_info">Additional Information Sent</option>
-                    </>
-                  )}
-                  {field.label.includes('Follow-up') && (
-                    <>
-                      <option value="yes">Yes - Follow-up Required</option>
-                      <option value="no">No - No Follow-up Needed</option>
-                    </>
-                  )}
-                  {field.label.includes('Ready') && (
-                    <>
-                      <option value="yes">Yes - Ready for Submission</option>
-                      <option value="no">No - Not Ready</option>
-                    </>
-                  )}
-                </TextField>
-              ) : field.type === 'textarea' ? (
-                <TextField
-                  fullWidth
-                  multiline
-                  rows={4}
-                  label={field.label}
-                  required={field.required}
-                  value={inputValues[field.label] || ''}
-                  onChange={(e) => setInputValues({ ...inputValues, [field.label]: e.target.value })}
-                  placeholder="Enter your notes or observations..."
-                />
-              ) : field.type === 'number' ? (
-                <TextField
-                  fullWidth
-                  type="number"
-                  label={field.label}
-                  required={field.required}
-                  value={inputValues[field.label] || ''}
-                  onChange={(e) => setInputValues({ ...inputValues, [field.label]: e.target.value })}
-                />
-              ) : (
-                <TextField
-                  fullWidth
-                  label={field.label}
-                  required={field.required}
-                  value={inputValues[field.label] || ''}
-                  onChange={(e) => setInputValues({ ...inputValues, [field.label]: e.target.value })}
-                />
-              )}
-            </Box>
-          ))}
-        </DialogContent>
-        <DialogActions sx={{ p: 2, borderTop: '1px solid #e0e0e0' }}>
-          <Button onClick={() => setHumanInputOpen(false)}>
-            Cancel
-          </Button>
-          <Button 
-            variant="contained" 
-            onClick={handleHumanInputSubmit}
-            startIcon={<SendIcon />}
-            sx={{ backgroundColor: '#ff9800', '&:hover': { backgroundColor: '#f57c00' } }}
-          >
-            Submit & Continue
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Step Details Dialog */}
-      <Dialog 
-        open={stepDetailsOpen} 
-        onClose={() => setStepDetailsOpen(false)}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle>
-          {selectedStep?.name}
         </DialogTitle>
         <DialogContent>
-          <Typography variant="body1" paragraph>
-            {selectedStep?.description}
-          </Typography>
-          {selectedStep?.requiresHumanInput && (
-            <Alert severity="warning" sx={{ mt: 2 }}>
-              <Typography variant="body2">
-                <strong>Human in Loop Required:</strong> This step requires user interaction and decision-making.
-              </Typography>
-            </Alert>
-          )}
-          {selectedStep?.status === 'awaiting_input' && (
-            <Button
-              variant="contained"
-              fullWidth
-              sx={{ mt: 2, backgroundColor: '#ff9800' }}
-              onClick={() => {
-                setStepDetailsOpen(false);
-                setHumanInputOpen(true);
-              }}
-            >
-              Provide Input
-            </Button>
+          {currentCompletedAgent && (
+            <Box>
+              {/* Agent Information */}
+              <Box sx={{ mb: 3 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                  <BarChartIcon sx={{ color: '#1a237e', fontSize: 24 }} />
+                  <Typography variant="h6" sx={{ fontWeight: 600, fontSize: '1.1rem', color: '#1a237e', fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif' }}>
+                    Agent Information
+                  </Typography>
+                </Box>
+                <Grid container spacing={2}>
+                  <Grid size={{ xs: 12, sm: 6 }}>
+                    <Typography variant="subtitle2" color="text.secondary" gutterBottom sx={{ fontSize: '0.85rem', fontWeight: 500, color: '#616161' }}>
+                      Agent Name
+                    </Typography>
+                    <Typography variant="body1" sx={{ fontWeight: 600, fontSize: '1rem', color: '#1a237e', fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif' }}>
+                      {currentCompletedAgent.agent}
+                    </Typography>
+                  </Grid>
+                  <Grid size={{ xs: 12, sm: 6 }}>
+                    <Typography variant="subtitle2" color="text.secondary" gutterBottom sx={{ fontSize: '0.85rem', fontWeight: 500, color: '#616161' }}>
+                      Step Number
+                    </Typography>
+                    <Typography variant="body1" sx={{ fontWeight: 600, fontSize: '1rem', color: '#1a237e', fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif' }}>
+                      {currentStepNumber}
+                    </Typography>
+                  </Grid>
+                  <Grid size={{ xs: 12, sm: 6 }}>
+                    <Typography variant="subtitle2" color="text.secondary" gutterBottom sx={{ fontSize: '0.85rem', fontWeight: 500, color: '#616161' }}>
+                      Step Title
+                    </Typography>
+                    <Typography variant="body1" sx={{ fontWeight: 600, fontSize: '1rem', color: '#1a237e', fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif' }}>
+                      {currentCompletedAgent.name}
+                    </Typography>
+                  </Grid>
+                  <Grid size={{ xs: 12, sm: 6 }}>
+                    <Typography variant="subtitle2" color="text.secondary" gutterBottom sx={{ fontSize: '0.85rem', fontWeight: 500, color: '#616161' }}>
+                      Agent Type
+                    </Typography>
+                    <Typography variant="body1" sx={{ fontSize: '0.95rem', color: '#424242', fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif' }}>
+                      {currentCompletedAgent.agentType}
+                    </Typography>
+                  </Grid>
+                  <Grid size={{ xs: 12 }}>
+                    <Typography variant="subtitle2" color="text.secondary" gutterBottom sx={{ fontSize: '0.85rem', fontWeight: 500, color: '#616161' }}>
+                      Description
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.9rem', lineHeight: 1.6, color: '#616161', fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif' }}>
+                      {currentCompletedAgent.description}
+                    </Typography>
+                  </Grid>
+                </Grid>
+              </Box>
+
+              <Divider sx={{ my: 3 }} />
+
+              {/* Output Data */}
+              <Box>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                  <DescriptionIcon sx={{ color: '#2e7d32', fontSize: 24 }} />
+                  <Typography variant="h6" sx={{ fontWeight: 600, fontSize: '1.1rem', color: '#2e7d32', fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif' }}>
+                    Output Data
+                  </Typography>
+                </Box>
+                <Paper
+                  sx={{
+                    p: 2.5,
+                    backgroundColor: '#fafafa',
+                    borderRadius: 2,
+                    border: '1px solid #e0e0e0',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+                  }}
+                >
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      whiteSpace: 'pre-wrap',
+                      lineHeight: 1.8,
+                      color: '#212121',
+                      fontSize: '0.95rem',
+                      fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif',
+                      fontWeight: 400
+                    }}
+                  >
+                    {currentCompletedAgent.output || 'No output generated.'}
+                  </Typography>
+                </Paper>
+              </Box>
+            </Box>
           )}
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setStepDetailsOpen(false)}>Close</Button>
+        <DialogActions sx={{ p: 2, pt: 1 }}>
+          <Button onClick={handleDialogClose} variant="contained" color="primary" fullWidth>
+            Continue to Next Step
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>

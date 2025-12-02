@@ -1,23 +1,25 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   Typography,
   Card,
   CardContent,
-  Grid,
-  Chip,
   Button,
-  Divider,
-  Alert
+  Tabs,
+  Tab
 } from '@mui/material';
 import {
-  PlayArrow as PlayArrowIcon,
   ArrowBack as ArrowBackIcon,
-  Person as PersonIcon,
-  LocalHospital as HospitalIcon,
-  AccountBalance as AccountBalanceIcon
+  Psychology as PsychologyIcon,
+  Description as DocumentIcon,
+  Chat as ChatIcon
 } from '@mui/icons-material';
 import { useQuery } from '../../contexts/QueryContext';
+import { getMockDataForQuery } from '../../services/mockDataService';
+import CaseExtractedInfo from './CaseExtractedInfo';
+import WorkflowOrchestration from '../LevelOfCare/WorkflowOrchestration';
+import AgentSummary from '../Agents/AgentSummary';
+import AIChat from '../Chat/AIChat';
 
 interface CaseDetailsProps {
   queryId: string;
@@ -25,149 +27,85 @@ interface CaseDetailsProps {
   onBack: () => void;
 }
 
+interface TabPanelProps {
+  children?: React.ReactNode;
+  index: number;
+  value: number;
+}
+
+function TabPanel(props: TabPanelProps) {
+  const { children, value, index, ...other } = props;
+  return (
+    <div role="tabpanel" hidden={value !== index} {...other}>
+      {value === index && <Box sx={{ pt: 3 }}>{children}</Box>}
+    </div>
+  );
+}
+
 const CaseDetails: React.FC<CaseDetailsProps> = ({ queryId, onStartWorkflow, onBack }) => {
-  const { queries, caseData } = useQuery();
+  const { queries, selectedQuery, setCaseData, setB2BCommunications, setCareOnNotes } = useQuery();
+  const [tabValue, setTabValue] = useState(0);
   const query = queries.find(q => q.id === queryId);
+
+  // Load mock data when query is selected
+  React.useEffect(() => {
+    if (query) {
+      const { caseData: mockCaseData, b2bCommunications: mockB2B, careOnNotes: mockNotes } = getMockDataForQuery(query);
+      setCaseData(mockCaseData);
+      setB2BCommunications(mockB2B);
+      setCareOnNotes(mockNotes);
+    }
+  }, [query, setCaseData, setB2BCommunications, setCareOnNotes]);
 
   if (!query) {
     return (
       <Box sx={{ p: 3 }}>
-        <Alert severity="error">Query not found</Alert>
+        <Typography variant="h6">Case not found.</Typography>
+        <Button variant="contained" onClick={onBack} sx={{ mt: 2 }}>
+          Back to Dashboard
+        </Button>
       </Box>
     );
   }
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'open': return 'error';
-      case 'in_progress': return 'warning';
-      case 'resolved': return 'success';
-      case 'escalated': return 'info';
-      default: return 'default';
-    }
+  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
+    setTabValue(newValue);
   };
 
   return (
     <Box sx={{ p: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4" sx={{ color: '#1976d2', fontWeight: 'bold' }}>
-          Case Details
+        <Typography variant="h4" component="h1" gutterBottom sx={{ color: '#1976d2', fontWeight: 'bold' }}>
+          Case Details: {query.caseNumber}
         </Typography>
-        <Box sx={{ display: 'flex', gap: 2 }}>
-          <Button variant="outlined" startIcon={<ArrowBackIcon />} onClick={onBack}>
-            Back
-          </Button>
-          <Button 
-            variant="contained" 
-            startIcon={<PlayArrowIcon />} 
-            onClick={onStartWorkflow}
-            size="large"
-          >
-            Start Workflow
-          </Button>
-        </Box>
+        <Button variant="outlined" onClick={onBack} startIcon={<ArrowBackIcon />}>
+          Back to Dashboard
+        </Button>
       </Box>
 
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid size={{ xs: 12, md: 6 }}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <PersonIcon /> Patient Information
-              </Typography>
-              <Divider sx={{ mb: 2 }} />
-              {caseData ? (
-                <>
-                  <Typography variant="body2" sx={{ mb: 1 }}>
-                    <strong>Name:</strong> {caseData.patientName} {caseData.patientSurname}
-                  </Typography>
-                  <Typography variant="body2" sx={{ mb: 1 }}>
-                    <strong>Date of Birth:</strong> {caseData.dateOfBirth}
-                  </Typography>
-                  <Typography variant="body2" sx={{ mb: 1 }}>
-                    <strong>Member Number:</strong> {caseData.memberNumber}
-                  </Typography>
-                  <Typography variant="body2">
-                    <strong>Admission:</strong> {caseData.admissionDate} to {caseData.dischargeDate}
-                  </Typography>
-                </>
-              ) : (
-                <Typography variant="body2" color="text.secondary">
-                  Case data will be loaded when workflow starts
-                </Typography>
-              )}
-            </CardContent>
-          </Card>
-        </Grid>
+      <Card sx={{ boxShadow: 3 }}>
+        <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+          <Tabs value={tabValue} onChange={handleTabChange} aria-label="case details tabs">
+            <Tab label="Orchestration" icon={<PsychologyIcon />} iconPosition="start" />
+            <Tab label="Extracted Info & Summary" icon={<DocumentIcon />} iconPosition="start" />
+            <Tab label="AI Chat" icon={<ChatIcon />} iconPosition="start" />
+          </Tabs>
+        </Box>
 
-        <Grid size={{ xs: 12, md: 6 }}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <AccountBalanceIcon /> Query Information
-              </Typography>
-              <Divider sx={{ mb: 2 }} />
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                <strong>Case Number:</strong> {query.caseNumber}
-              </Typography>
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                <strong>Query Type:</strong> 
-                <Chip 
-                  label={query.queryType} 
-                  size="small" 
-                  color="primary" 
-                  sx={{ ml: 1 }} 
-                />
-              </Typography>
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                <strong>Query Amount:</strong> 
-                <Typography component="span" sx={{ color: '#d32f2f', fontWeight: 'bold', ml: 1 }}>
-                  R{query.queryAmount.toLocaleString('en-ZA', { minimumFractionDigits: 2 })}
-                </Typography>
-              </Typography>
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                <strong>Medical Aid:</strong> {query.medicalAid}
-              </Typography>
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                <strong>Hospital:</strong> {query.hospital}
-              </Typography>
-              <Typography variant="body2">
-                <strong>Status:</strong> 
-                <Chip 
-                  label={query.status.toUpperCase()} 
-                  size="small" 
-                  color={getStatusColor(query.status) as any}
-                  sx={{ ml: 1 }} 
-                />
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
-
-      <Card>
         <CardContent>
-          <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <HospitalIcon /> Query Summary
-          </Typography>
-          <Divider sx={{ mb: 2 }} />
-          <Typography variant="body1" paragraph>
-            This query requires investigation and resolution through the Level of Care EQuery workflow.
-            The system will guide you through all necessary steps including SAP investigation, 
-            B2B authorization review, clinical data retrieval, and final query closure.
-          </Typography>
-          <Box sx={{ mt: 3, p: 2, backgroundColor: '#f5f5f5', borderRadius: 1 }}>
-            <Typography variant="subtitle2" gutterBottom>
-              Next Steps:
-            </Typography>
-            <Typography variant="body2" component="div">
-              • Review billing triage information<br />
-              • Investigate short payment reason in SAP<br />
-              • Review B2B authorization communication<br />
-              • Retrieve and submit clinical data<br />
-              • Close query in DebtPack
-            </Typography>
-          </Box>
+          <TabPanel value={tabValue} index={0}>
+            <WorkflowOrchestration queryType={query.queryType} onBack={onBack} />
+          </TabPanel>
+
+          <TabPanel value={tabValue} index={1}>
+            <CaseExtractedInfo />
+          </TabPanel>
+
+          <TabPanel value={tabValue} index={2}>
+            <Box sx={{ height: '600px' }}>
+              <AIChat caseId={query.caseNumber} queryType={query.queryType} />
+            </Box>
+          </TabPanel>
         </CardContent>
       </Card>
     </Box>
@@ -175,4 +113,3 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({ queryId, onStartWorkflow, onB
 };
 
 export default CaseDetails;
-

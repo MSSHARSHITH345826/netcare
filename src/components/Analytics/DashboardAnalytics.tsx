@@ -7,6 +7,7 @@ import {
   Box
 } from '@mui/material';
 import GeographicMap from './GeographicMap';
+import QueryTypeAnalytics from './QueryTypeAnalytics';
 import {
   BarChart,
   Bar,
@@ -67,118 +68,34 @@ const DashboardAnalytics: React.FC<DashboardAnalyticsProps> = ({ queryType, quer
   ];
 
   return (
-    <Grid container spacing={3}>
-      <Grid size={{ xs: 12, md: 6 }}>
-        <Card>
-          <CardContent>
-            <Typography variant="h6" sx={{ mb: 2, fontWeight: 'bold', fontSize: '0.95rem' }}>
-              Query Status Distribution
-            </Typography>
-            <ResponsiveContainer width="100%" height={250}>
-              <PieChart>
-                <Pie
-                  data={statusData}
-                  cx="50%"
-                  cy="50%"
-                  labelLine={false}
-                  label={({ name, percent }: any) => `${name} ${percent ? (percent * 100).toFixed(0) : 0}%`}
-                  outerRadius={70}
-                  fill="#8884d8"
-                  dataKey="value"
-                >
-                  {statusData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
+    <Box>
+      <QueryTypeAnalytics queryType={queryType} queries={queries} />
+      <Grid container spacing={3} sx={{ mt: 1 }}>
+        <Grid size={{ xs: 12, md: 6 }}>
+          <GeographicMap queryType={queryType} />
+        </Grid>
+        <Grid size={{ xs: 12, md: 6 }}>
+          <Card>
+            <CardContent>
+              <Typography variant="h6" sx={{ mb: 2, fontWeight: 'bold', fontSize: '0.95rem' }}>
+                Monthly Resolution Trend
+              </Typography>
+              <ResponsiveContainer width="100%" height={250}>
+                <LineChart data={monthlyData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
+                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                  <YAxis tick={{ fontSize: 12 }} />
+                  <Tooltip />
+                  <Legend />
+                  <Line type="monotone" dataKey="resolved" stroke="#4caf50" strokeWidth={2} name="Resolved" />
+                  <Line type="monotone" dataKey="open" stroke="#f44336" strokeWidth={2} name="Open" />
+                </LineChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+        </Grid>
       </Grid>
-
-      <Grid size={{ xs: 12, md: 6 }}>
-        <Card>
-          <CardContent>
-            <Typography variant="h6" sx={{ mb: 2, fontWeight: 'bold', fontSize: '0.95rem' }}>
-              Query Types
-            </Typography>
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={queryTypeData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-                <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                <YAxis tick={{ fontSize: 12 }} />
-                <Tooltip />
-                <Bar dataKey="value" fill="#1976d2" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      </Grid>
-
-      <Grid size={{ xs: 12, md: 6 }}>
-        <Card>
-          <CardContent>
-            <Typography variant="h6" sx={{ mb: 2, fontWeight: 'bold', fontSize: '0.95rem' }}>
-              Monthly Resolution Trend
-            </Typography>
-            <ResponsiveContainer width="100%" height={250}>
-              <LineChart data={monthlyData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-                <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                <YAxis tick={{ fontSize: 12 }} />
-                <Tooltip />
-                <Legend />
-                <Line type="monotone" dataKey="resolved" stroke="#4caf50" strokeWidth={2} name="Resolved" />
-                <Line type="monotone" dataKey="open" stroke="#f44336" strokeWidth={2} name="Open" />
-              </LineChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      </Grid>
-
-      <Grid size={{ xs: 12, md: 6 }}>
-        <Card>
-          <CardContent>
-            <Typography variant="h6" sx={{ mb: 2, fontWeight: 'bold', fontSize: '0.95rem' }}>
-              Amount by Query Type (R'000)
-            </Typography>
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={amountByType} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-                <XAxis type="number" tick={{ fontSize: 12 }} />
-                <YAxis dataKey="name" type="category" tick={{ fontSize: 12 }} width={120} />
-                <Tooltip formatter={(value: any) => `R${typeof value === 'number' ? value.toFixed(0) : value}k`} />
-                <Bar dataKey="amount" fill="#1976d2" radius={[0, 4, 4, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      </Grid>
-
-      <Grid size={{ xs: 12, md: 6 }}>
-        <Card>
-          <CardContent>
-            <Typography variant="h6" sx={{ mb: 2, fontWeight: 'bold', fontSize: '0.95rem' }}>
-              Average Resolution Time (Days)
-            </Typography>
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={resolutionTime}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-                <XAxis dataKey="type" tick={{ fontSize: 12 }} />
-                <YAxis tick={{ fontSize: 12 }} />
-                <Tooltip formatter={(value) => `${value} days`} />
-                <Bar dataKey="avgDays" fill="#1976d2" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      </Grid>
-
-      <Grid size={{ xs: 12, md: 6 }}>
-        <GeographicMap queryType={queryType} />
-      </Grid>
-    </Grid>
+    </Box>
   );
 };
 

@@ -22,6 +22,8 @@ import SAPAuthScreenView from './steps/SAPAuthScreenView';
 import CareOnClinicalView from './steps/CareOnClinicalView';
 import DebtPackView from './steps/DebtPackView';
 import WorkflowOrchestration from './WorkflowOrchestration';
+import AgentSummary from '../Agents/AgentSummary';
+import AIChat from '../Chat/AIChat';
 import { useQuery } from '../../contexts/QueryContext';
 
 interface TabPanelProps {
@@ -76,12 +78,14 @@ const LevelOfCareWorkflow: React.FC<LevelOfCareWorkflowProps> = ({ queryType = '
         <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
           <Tabs value={tabValue} onChange={handleTabChange} aria-label="workflow tabs">
             <Tab label="Orchestration" icon={<PsychologyIcon />} iconPosition="start" />
+            <Tab label="Agent Summary" icon={<PsychologyIcon />} iconPosition="start" />
             <Tab label="Billing Triage" icon={<DocumentIcon />} iconPosition="start" />
             <Tab label="SAP Scratchpad" icon={<DocumentIcon />} iconPosition="start" />
             <Tab label="Case Overview" icon={<DocumentIcon />} iconPosition="start" />
             <Tab label="Auth Screen" icon={<DocumentIcon />} iconPosition="start" />
             <Tab label="CareOn Clinical" icon={<DocumentIcon />} iconPosition="start" />
             <Tab label="DebtPack" icon={<DocumentIcon />} iconPosition="start" />
+            <Tab label="AI Chat" icon={<PsychologyIcon />} iconPosition="start" />
           </Tabs>
         </Box>
 
@@ -91,27 +95,37 @@ const LevelOfCareWorkflow: React.FC<LevelOfCareWorkflowProps> = ({ queryType = '
           </TabPanel>
 
           <TabPanel value={tabValue} index={1}>
-            <BillingTriageView stepIndex={0} onComplete={() => {}} onNext={() => setTabValue(2)} onBack={() => {}} />
+            <AgentSummary queryType={queryType} />
           </TabPanel>
 
           <TabPanel value={tabValue} index={2}>
-            <SAPScratchpadView stepIndex={1} onComplete={() => {}} onNext={() => setTabValue(3)} onBack={() => setTabValue(1)} />
+            <BillingTriageView stepIndex={0} onComplete={() => {}} onNext={() => setTabValue(3)} onBack={() => {}} />
           </TabPanel>
 
           <TabPanel value={tabValue} index={3}>
-            <SAPCaseOverviewView stepIndex={3} onComplete={() => {}} onNext={() => setTabValue(4)} onBack={() => setTabValue(2)} />
+            <SAPScratchpadView stepIndex={1} onComplete={() => {}} onNext={() => setTabValue(4)} onBack={() => setTabValue(2)} />
           </TabPanel>
 
           <TabPanel value={tabValue} index={4}>
-            <SAPAuthScreenView stepIndex={4} onComplete={() => {}} onNext={() => setTabValue(5)} onBack={() => setTabValue(3)} />
+            <SAPCaseOverviewView stepIndex={3} onComplete={() => {}} onNext={() => setTabValue(5)} onBack={() => setTabValue(3)} />
           </TabPanel>
 
           <TabPanel value={tabValue} index={5}>
-            <CareOnClinicalView stepIndex={7} onComplete={() => {}} onNext={() => setTabValue(6)} onBack={() => setTabValue(4)} />
+            <SAPAuthScreenView stepIndex={4} onComplete={() => {}} onNext={() => setTabValue(6)} onBack={() => setTabValue(4)} />
           </TabPanel>
 
           <TabPanel value={tabValue} index={6}>
-            <DebtPackView stepIndex={9} onComplete={() => {}} onNext={() => {}} onBack={() => setTabValue(5)} />
+            <CareOnClinicalView stepIndex={7} onComplete={() => {}} onNext={() => setTabValue(7)} onBack={() => setTabValue(5)} />
+          </TabPanel>
+
+          <TabPanel value={tabValue} index={7}>
+            <DebtPackView stepIndex={9} onComplete={() => {}} onNext={() => {}} onBack={() => setTabValue(6)} />
+          </TabPanel>
+
+          <TabPanel value={tabValue} index={8}>
+            <Box sx={{ height: '600px' }}>
+              <AIChat caseId={selectedQuery?.caseNumber} queryType={queryType} />
+            </Box>
           </TabPanel>
         </CardContent>
       </Card>
